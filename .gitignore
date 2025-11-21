@@ -31,3 +31,8 @@ pgdata/
 
 # Logs
 *.log
+*.o
+*.so
+*.bc
+results/
+*.zip
