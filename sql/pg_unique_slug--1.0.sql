@@ -3,18 +3,16 @@
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
 \echo Use "CREATE EXTENSION pg_unique_slug" to load this file. \quit
 
-CREATE FUNCTION gen_unique_slug(
-    table_name text,
-    column_name text,
-    slug_length int
-)
+CREATE FUNCTION gen_unique_slug(slug_length int DEFAULT 16)
 RETURNS text
 AS 'MODULE_PATHNAME'
 LANGUAGE C
-VOLATILE
-STRICT;
+VOLATILE;
 
-COMMENT ON FUNCTION gen_unique_slug(text, text, int) IS
-'Generate a cryptographically secure random slug with guaranteed uniqueness.
-Parameters: table_name, column_name, slug_length (1-256).
-Uses pg_strong_random() and checks for uniqueness in the specified table/column.';
+COMMENT ON FUNCTION gen_unique_slug(int) IS
+'Generate a unique slug based on timestamp with randomized character mapping.
+Parameters:
+  slug_length: 10 (seconds), 13 (milliseconds), 16 (microseconds), 19 (nanoseconds)
+  Default: 16 (microseconds)
+Returns: Unique slug with hyphen separator (e.g., "qWeRtYuI-oPasDfGh")
+Guarantees uniqueness when there is at most one insert per time unit.';

@@ -27,7 +27,7 @@ case "$1" in
 
   build)
     echo "Building extension inside container..."
-    docker exec -it $CONTAINER_NAME bash -c "cd /extension && make clean && make && make install"
+    docker exec -u root -it $CONTAINER_NAME bash -c "cd /extension && make clean && make && make install"
     echo "Extension built successfully!"
     ;;
 
@@ -56,34 +56,24 @@ case "$1" in
 
   test)
     echo "Running regression tests..."
-    docker exec -it $CONTAINER_NAME bash -c "cd /extension && make installcheck"
+    docker exec -u root -it $CONTAINER_NAME bash -c "cd /extension && make installcheck PGUSER=postgres"
     echo ""
     echo "Check test/regression.diffs for any failures (empty = all passed)"
     ;;
 
   quicktest)
     echo "Running quick manual test..."
-    docker exec -it $CONTAINER_NAME psql -U $DB_USER -d $DB_NAME << 'EOF'
--- Create test table
-DROP TABLE IF EXISTS test_slugs;
-CREATE TABLE test_slugs (
-    id serial PRIMARY KEY,
-    slug text UNIQUE
-);
+    docker exec -i $CONTAINER_NAME psql -U $DB_USER -d $DB_NAME << 'EOF'
+-- Test different precision levels
+SELECT 'Length 10 (seconds):' as test, gen_unique_slug(10) as slug;
+SELECT 'Length 13 (millis):' as test, gen_unique_slug(13) as slug;
+SELECT 'Length 16 (micros):' as test, gen_unique_slug(16) as slug;
+SELECT 'Length 19 (nanos):' as test, gen_unique_slug(19) as slug;
+SELECT 'Default (16):' as test, gen_unique_slug() as slug;
 
--- Generate some slugs
-INSERT INTO test_slugs (slug)
-SELECT gen_unique_slug('test_slugs', 'slug', 8)
-FROM generate_series(1, 10);
-
--- Show results
-SELECT * FROM test_slugs;
-
--- Verify uniqueness
-SELECT COUNT(*), COUNT(DISTINCT slug) FROM test_slugs;
-
--- Cleanup
-DROP TABLE test_slugs;
+-- Generate multiple slugs
+SELECT 'Multiple slugs:' as test;
+SELECT gen_unique_slug() FROM generate_series(1, 5);
 
 SELECT 'Quick test completed!' as result;
 EOF

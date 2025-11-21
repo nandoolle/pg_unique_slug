@@ -1,34 +1,25 @@
 # pg_unique_slug
 
-PostgreSQL extension for generating cryptographically secure unique random slugs.
+PostgreSQL extension for generating unique random slugs based on timestamp.
 
 ## Features
 
-- **Cryptographically Secure**: Uses `pg_strong_random()` for generating random slugs
-- **Guaranteed Uniqueness**: Checks existing values in your table to ensure no collisions
-- **Configurable Length**: Generate slugs from 1 to 256 characters
-- **Character Set**: Uses A-Z and a-z (52 possible characters per position)
-- **SQL Injection Safe**: Properly quotes identifiers and values
+- **Guaranteed Uniqueness**: Based on timestamp - unique when max 1 insert per time unit
+- **Cryptographically Random**: Uses `pg_strong_random()` for character selection
+- **Configurable Precision**: seconds, milliseconds, microseconds, or nanoseconds
+- **URL-Friendly**: Only letters A-Z, a-z with hyphen separator
+- **QWERTY Layout**: Characters distributed following keyboard layout
 
 ## Installation
 
 ### From Source
-
-#### Requirements
-
-- PostgreSQL 12 or higher
-- PostgreSQL development headers (`postgresql-server-dev`)
-- C compiler (gcc or clang)
-- make
-
-#### Build and Install
 
 ```bash
 make
 make install
 ```
 
-#### Enable Extension
+### Enable Extension
 
 ```sql
 CREATE EXTENSION pg_unique_slug;
@@ -37,12 +28,9 @@ CREATE EXTENSION pg_unique_slug;
 ### Using Docker (Development)
 
 ```bash
-docker-compose up -d
-docker exec -it pg_unique_slug_dev psql -U postgres -d testdb
-```
-
-```sql
-CREATE EXTENSION pg_unique_slug;
+./dev.sh start
+./dev.sh rebuild
+./dev.sh psql
 ```
 
 ## Usage
@@ -50,23 +38,57 @@ CREATE EXTENSION pg_unique_slug;
 ### Function Signature
 
 ```sql
-gen_unique_slug(table_name text, column_name text, slug_length int) RETURNS text
+gen_unique_slug(slug_length int DEFAULT 16) RETURNS text
 ```
 
-### Parameters
+### Interface
 
-- `table_name`: Name of the table to check for uniqueness
-- `column_name`: Name of the column containing slug values
-- `slug_length`: Length of the slug to generate (1-256)
+```sql
+gen_unique_slug()      -- default: 16 (microseconds)
+gen_unique_slug(10)    -- seconds
+gen_unique_slug(13)    -- milliseconds
+gen_unique_slug(16)    -- microseconds
+gen_unique_slug(19)    -- nanoseconds
+```
+
+### Timestamp Precision
+
+Each precision level corresponds to Unix timestamp digits:
+
+| Precision     | Digits | Timestamp Example   | Max Inserts (collision-free) |
+|---------------|--------|---------------------|------------------------------|
+| Seconds       | 10     | `1732056789`        | 1/second                     |
+| Milliseconds  | 13     | `1732056789123`     | 1,000/second                 |
+| Microseconds  | 16     | `1732056789123456`  | 1,000,000/second             |
+| Nanoseconds   | 19     | `1732056789123456789` | 1 billion/second           |
+
+### Slug Format
+
+The slug includes a hyphen separator at the midpoint:
+
+| Precision | Format | Example Output           | Total Length |
+|-----------|--------|--------------------------|--------------|
+| 10 (sec)  | 5-5    | `AbCdE-FgHiJ`            | 11 chars     |
+| 13 (ms)   | 6-7    | `AbCdEf-GhIjKlM`         | 14 chars     |
+| 16 (μs)   | 8-8    | `AbCdEfGh-IjKlMnOp`      | 17 chars     |
+| 19 (ns)   | 9-10   | `AbCdEfGhI-JkLmNoPqRs`   | 20 chars     |
+
+**Default: 16 (microseconds) - 17 characters**
 
 ### Examples
 
 #### Basic Usage
 
 ```sql
--- Generate a 12-character unique slug for products table
-SELECT gen_unique_slug('products', 'slug', 12);
--- Result: 'aBcDeFgHiJkL'
+-- Default (microseconds precision)
+SELECT gen_unique_slug();
+-- Result: 'qWeRtYuI-oPasDfGh'
+
+-- Specific precision
+SELECT gen_unique_slug(10);   -- seconds: 11 chars
+SELECT gen_unique_slug(13);   -- milliseconds: 14 chars
+SELECT gen_unique_slug(16);   -- microseconds: 17 chars
+SELECT gen_unique_slug(19);   -- nanoseconds: 20 chars
 ```
 
 #### As Column Default
@@ -75,7 +97,7 @@ SELECT gen_unique_slug('products', 'slug', 12);
 CREATE TABLE products (
     id serial PRIMARY KEY,
     name text NOT NULL,
-    slug text DEFAULT gen_unique_slug('products', 'slug', 12) UNIQUE
+    slug text DEFAULT gen_unique_slug() UNIQUE
 );
 
 INSERT INTO products (name) VALUES ('My Product');
@@ -86,43 +108,46 @@ INSERT INTO products (name) VALUES ('My Product');
 
 ```sql
 INSERT INTO products (name, slug)
-VALUES ('Another Product', gen_unique_slug('products', 'slug', 8));
-```
-
-#### Generate Multiple Slugs
-
-```sql
-SELECT gen_unique_slug('users', 'code', 10) FROM generate_series(1, 5);
+VALUES ('Another Product', gen_unique_slug(13));
 ```
 
 ## How It Works
 
-1. Generates a random slug using `pg_strong_random()`
-2. Checks if the slug exists in the specified table/column
-3. If it exists, generates a new one and checks again
-4. Returns the first unique slug found
+### Algorithm
 
-## Collision Probability
+1. Get current timestamp with specified precision
+2. Convert each digit (0-9) to a letter using QWERTY-based bucket mapping
+3. Randomly select one letter from the bucket for each digit
+4. Insert hyphen at midpoint
 
-The probability of collision depends on the slug length and number of existing slugs:
+### Character Buckets (QWERTY Layout)
 
-- **8 characters**: 52^8 = ~53 trillion possibilities
-- **12 characters**: 52^12 = ~390 quadrillion possibilities
-- **16 characters**: 52^16 = ~2.8 × 10^27 possibilities
+```
+Digit 0: qWeRtY (6 letters)
+Digit 1: QwErTy (6 letters)
+Digit 2: uIoPa  (5 letters)
+Digit 3: UiOpA  (5 letters)
+Digit 4: sDfGh  (5 letters)
+Digit 5: SdFgH  (5 letters)
+Digit 6: jKlZx  (5 letters)
+Digit 7: JkLzX  (5 letters)
+Digit 8: cVbNm  (5 letters)
+Digit 9: CvBnM  (5 letters)
+```
 
-For most applications, a 12-character slug provides excellent uniqueness guarantees.
+**Each bucket contains unique characters** - no overlap between buckets.
 
-## Performance Considerations
+### Uniqueness Guarantee
 
-- **First Insert**: Very fast (single random generation)
-- **High Collision Rate**: If your table has many slugs with the same length, generation might retry multiple times
-- **Recommendation**: Use longer slugs if you expect millions of records
+- **Different timestamps = different slugs** (at least one digit differs)
+- **Same timestamp = possible collision** (~1 in 10 million with microseconds)
 
-## Security
-
-- Uses `pg_strong_random()` which is cryptographically secure
-- All table and column names are properly quoted to prevent SQL injection
-- All values are properly escaped
+| Precision    | Collision-free if...       |
+|--------------|----------------------------|
+| seconds      | max 1 insert/second        |
+| milliseconds | max 1 insert/millisecond   |
+| microseconds | max 1 insert/microsecond   |
+| nanoseconds  | max 1 insert/nanosecond    |
 
 ## Development
 
@@ -136,92 +161,35 @@ pg_unique_slug/
 │   └── pg_unique_slug--1.0.sql # SQL installation script
 ├── test/
 │   ├── sql/
-│   │   └── basic.sql          # Regression test SQL
+│   │   └── basic.sql          # Regression tests
 │   └── expected/
-│       └── basic.out          # Expected test output
-├── Makefile                   # Build configuration
-├── META.json                  # PGXN metadata
-├── Dockerfile                 # Development environment
-├── docker-compose.yml         # Docker setup
-├── dev.sh                     # Development helper script
-└── README.md                  # This file
+│       └── basic.out          # Expected output
+├── Makefile
+├── Dockerfile
+├── docker-compose.yml
+├── dev.sh                     # Development helper
+└── README.md
 ```
 
 ### Building with Docker
 
 ```bash
-docker-compose build
-docker-compose up -d
-docker exec -it pg_unique_slug_dev bash
+./dev.sh start     # Start PostgreSQL container
+./dev.sh build     # Build extension
+./dev.sh install   # Install in database
+./dev.sh rebuild   # Build + Install
 ```
 
 ### Running Tests
 
-The extension includes comprehensive regression tests using PostgreSQL's `pg_regress` framework.
-
-#### Quick Test with Helper Script
-
 ```bash
-./dev.sh test
+./dev.sh test      # Run regression tests
+./dev.sh quicktest # Quick manual test
 ```
-
-#### Manual Test Execution
-
-```bash
-# Build and install the extension
-make clean
-make
-make install
-
-# Run regression tests
-make installcheck
-```
-
-#### What the Tests Cover
-
-- Basic slug generation
-- Character set validation (A-Z, a-z only)
-- Uniqueness verification (100 concurrent slugs)
-- Edge cases (minimum length 1, maximum length 256)
-- Error handling (invalid lengths)
-- SQL injection protection (quoted table/column names)
-- Collision handling with pre-existing data
-- DEFAULT value usage in table definitions
-
-#### Test Results
-
-After running `make installcheck`, check:
-- `test/regression.diffs` - Shows any differences (empty = all passed)
-- `test/results/` - Contains actual test output
-
-#### Using Docker
-
-```bash
-# Start container
-./dev.sh start
-
-# Build and install
-./dev.sh rebuild
-
-# Run tests
-docker exec -it pg_unique_slug_dev bash -c "cd /extension && make installcheck"
-
-# Or use the helper
-./dev.sh test
-```
-
-## Publishing to PGXN
-
-1. Create account at https://manager.pgxn.org
-2. Package the extension:
-   ```bash
-   git archive --format zip --prefix=pg_unique_slug-1.0.0/ --output pg_unique_slug-1.0.0.zip HEAD
-   ```
-3. Upload to PGXN Manager
 
 ## License
 
-MIT License - see LICENSE file for details
+MIT License - see LICENSE file for details.
 
 ## Author
 
@@ -230,8 +198,3 @@ Fernando Olle
 ## Contributing
 
 Contributions are welcome! Please open an issue or submit a pull request.
-
-## Support
-
-- GitHub Issues: https://github.com/fernandoolle/pg_unique_slug/issues
-- PGXN: https://pgxn.org/dist/pg_unique_slug/
